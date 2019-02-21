@@ -1,0 +1,22 @@
+{
+    "name": "jext/yii2-wechat",
+    "description": "wechat sdk for yii2",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Jeen",
+            "email": "jeen@vsfor.com"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "php": ">=7.2",
+        "jext/yii2-jeen": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "jext\\wechat\\": "src/"
+        }
+    }
+}
