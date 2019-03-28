@@ -1,0 +1,10 @@
+*
+!.gitignore
+
+## 可将商户证书 上传 存放于本目录，或使用软连接的形式进行关联
+## 如商户号为 12300006666
+## 则存放路径为 src/wxpay/cert/12300006666/
+## src/wxpay/cert/12300006666/apiclient_key.pem
+## src/wxpay/cert/12300006666/apiclient_cert.pem
+
+## 为保障安全，请勿将证书文件提交至远程代码仓库

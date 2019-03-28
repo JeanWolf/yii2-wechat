@@ -172,16 +172,123 @@ class WxBase extends Component
     const CURL_PROXY_HOST = '0.0.0.0';
     const CURL_PROXY_PORT = 0;
 
-    public static function getKeyPath()
+    public function getKeyPath()
     {
-        $path = dirname(__DIR__) . '/wxpay/cert/'.self::getMchId().'/apiclient_key.pem';
+        $path = dirname(__DIR__) . '/wxpay/cert/'.$this->mchId.'/apiclient_key.pem';
         return $path;
     }
 
-    public static function getCertPath()
+    public function getCertPath()
     {
-        $path = dirname(__DIR__) . '/wxpay/cert/'.self::getMchId().'/apiclient_cert.pem';
+        $path = dirname(__DIR__) . '/wxpay/cert/'.$this->mchId.'/apiclient_cert.pem';
         return $path;
+    }
+
+    public function postXmlCurl($xml, $url, $useCert = false, $second = 3)
+    {
+        $ch = curl_init();
+        //设置超时
+        curl_setopt($ch, CURLOPT_TIMEOUT, $second);
+        //要求结果为字符串且输出到屏幕上
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
+
+        //如果有配置代理这里就设置代理
+        if(self::CURL_PROXY_HOST != '0.0.0.0'
+            && self::CURL_PROXY_PORT != 0){
+            curl_setopt($ch,CURLOPT_PROXY, self::CURL_PROXY_HOST);
+            curl_setopt($ch,CURLOPT_PROXYPORT, self::CURL_PROXY_PORT);
+        }
+        curl_setopt($ch,CURLOPT_URL, $url);
+        if($useCert == true){
+            //设置证书
+            curl_setopt($ch,CURLOPT_SSL_VERIFYPEER,false);
+            curl_setopt($ch,CURLOPT_SSL_VERIFYHOST,false);
+            //使用证书：cert 与 key 分别属于两个.pem文件
+            curl_setopt($ch,CURLOPT_SSLCERTTYPE,'PEM');
+            curl_setopt($ch,CURLOPT_SSLCERT, $this->getCertPath());
+            curl_setopt($ch,CURLOPT_SSLKEYTYPE,'PEM');
+            curl_setopt($ch,CURLOPT_SSLKEY, $this->getKeyPath());
+        } else {
+            curl_setopt($ch,CURLOPT_SSL_VERIFYPEER,TRUE);
+            curl_setopt($ch,CURLOPT_SSL_VERIFYHOST,2);//严格校验
+        }
+        //设置header
+//        curl_setopt($ch, CURLOPT_HEADER, FALSE);
+
+        //post提交方式
+        curl_setopt($ch, CURLOPT_POST, TRUE);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $xml);
+        //运行curl
+        $data = curl_exec($ch);
+        //返回结果
+        if($data){
+            curl_close($ch);
+            return $data;
+        } else {
+            $code = curl_errno($ch);
+            $msg = curl_error($ch);
+            curl_close($ch);
+            throw new \Exception("curl出错,Code:$code,Msg:$msg");
+        }
+    }
+
+    public function httpGet($url, $safe = true) {
+        $curl = curl_init();
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($curl, CURLOPT_TIMEOUT, 300);
+
+        if ($safe) {
+            // 为保证数据传输的安全性，采用https方式调用，必须使用下面2行代码打开ssl安全校验。
+            curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 2);
+        }
+
+        curl_setopt($curl, CURLOPT_URL, $url);
+
+        $res = curl_exec($curl);
+        curl_close($curl);
+
+        return $res;
+    }
+
+    public function httpPost($url, $body, $type='json', $safe = true)
+    {
+        if (!is_string($body)) {
+            if ($type == 'json') {
+                $body = json_encode($body);
+            } else {
+                $body = http_build_query($body);
+            }
+        }
+        $curl = curl_init();
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($curl, CURLOPT_TIMEOUT, 300);
+
+        if ($safe) {
+            // 为保证数据传输的安全性，采用https方式调用，必须使用下面2行代码打开ssl安全校验。
+            curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 2);
+        }
+
+        if ($type == 'json') {
+            curl_setopt($curl, CURLOPT_HTTPHEADER, [
+                "Connection: keep-alive",
+                "Content-Type: application/json; charset=UTF-8", //传送的数据类型
+                "Content-Length: ".strlen($body) //传送数据长度
+            ]);
+        } else {
+            curl_setopt($curl, CURLOPT_HTTPHEADER, [
+                "Connection: keep-alive"
+            ]);
+        }
+        curl_setopt($curl, CURLOPT_POST, 1);
+        curl_setopt($curl, CURLOPT_URL, $url);
+        curl_setopt($curl, CURLOPT_POSTFIELDS, $body);//要传送的所有数据
+
+        $res = curl_exec($curl);
+        curl_close($curl);
+
+        return $res;
     }
 
 
