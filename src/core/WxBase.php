@@ -5,10 +5,6 @@ namespace jext\wechat\core;
 use Yii;
 use yii\base\Component;
 use yii\helpers\Json;
-use yii\httpclient\Client;
-use yii\httpclient\CurlTransport;
-use yii\httpclient\Request;
-use yii\httpclient\Response;
 
 class WxBase extends Component
 {
@@ -22,22 +18,7 @@ class WxBase extends Component
     public $notifyUrl = '';
     public $refundNotifyUrl = '';
 
-    /** @var Client $client */
-    public $client;
-    /** @var Request $request */
-    public $request;
-    /** @var Response $response */
-    public $response;
-
     public $baseUrl = 'https://api.weixin.qq.com/';
-    public $apiName;
-    public $requestUrl; //url string, default make by baseUrl . apiName
-    public $headers; // headers array
-    public $options; // curl options array
-    public $getParams; //get params array
-    public $postParams; //post params array
-    public $paramType; // form | json
-
 
     public function init()
     {
@@ -73,95 +54,25 @@ class WxBase extends Component
         if ($at) {
             return $at;
         }
-        $this->resetRequest();
-        $this->apiName = 'cgi-bin/token';
-        $this->getParams = [
-            'appid' => $this->appId,
-            'secret' => $this->appSecret,
-            'grant_type' => 'client_credential',
-        ];
 
-        $res = Json::decode($this->sendRequest());
-        if (isset($res['access_token'])) {
-            $cache->set($key, $res['access_token'], $res['expires_in'] - 180);
-            return $res['access_token'];
-        }
-        return '';
-    }
-
-    public function resetRequest()
-    {
-        $this->client = new Client();
-        $this->client->setTransport(CurlTransport::class);
-        $this->request = new Request(['client' => $this->client]);
-        $this->headers = [];
-        $this->options = [
-            'timeout' => 3,
-            'maxRedirects' => 3
-        ];
-        $this->baseUrl='https://api.weixin.qq.com/';
-        $this->apiName = '';
-        $this->requestUrl = '';
-        $this->getParams = [];
-        $this->postParams = [];
-        $this->paramType = 'form';
-    }
-
-    /**
-     * 与 resetRequest 配套使用
-     * @return bool|string
-     */
-    public function sendRequest()
-    {
-        if (!$this->apiName && !$this->requestUrl) {
-            return false;
-        }
-
-        $this->requestUrl = $this->requestUrl ? : $this->baseUrl . $this->apiName;
-        if ($this->options) {
-            $this->request->addOptions($this->options);
-        }
-        if ($this->headers) {
-            $this->request->addHeaders($this->headers);
-        }
-        if ($this->getParams) {
-            if (strpos($this->requestUrl,'?')) {
-                $this->requestUrl .= '&'.http_build_query($this->getParams);
-            } else {
-                $this->requestUrl .= '?'.http_build_query($this->getParams);
-            }
-        }
-        if (!in_array($this->request->getMethod(), ['get','GET']) || $this->postParams) {
-            if ($this->paramType == 'json') {
-                $this->request->addHeaders(['Content-Type' => 'application/json']);
-                $this->request->setContent(json_encode($this->postParams));
-            } else {
-                $this->request->setContent(http_build_query($this->postParams));
-            }
-        }
-
-        $this->request->setUrl($this->requestUrl);
+        $url = 'https://api.weixin.qq.com/cgi-bin/token?'
+            . http_build_query([
+                'appid' => $this->appId,
+                'secret' => $this->appSecret,
+                'grant_type' => 'client_credential',
+            ]);
 
         try {
-            $uniqueId = md5($this->appId.':'.microtime(true).':'.$this->requestUrl);
-            LogHelper::log([
-                $uniqueId .' [RequestStart] '.get_called_class(),
-                'requestUrl' => $this->requestUrl,
-                'getParams' => $this->getParams,
-                'postParams' => $this->postParams,
-            ], 'request');
-            $this->response = $this->client->send($this->request);
-            LogHelper::log($uniqueId . ' [RequestDone] ' . $this->response->getContent(), 'request');
+            $res = Json::decode($this->httpGet($url));
+            $at = $res['access_token'] ?? '';
+            if ($at) {
+                $cache->set($key, $at, 7020);
+                return $at;
+            }
         } catch (\Exception $e) {
-            LogHelper::exception($e, [
-                $this->requestUrl,
-                $this->paramType,
-                $this->postParams,
-            ]);
-            $this->response = new Response();
+            //skip...
         }
-
-        return $this->response->getContent();
+        return '';
     }
 
     /**
@@ -184,13 +95,20 @@ class WxBase extends Component
         return $path;
     }
 
-    public function postXmlCurl($xml, $url, $useCert = false, $second = 3)
+    public function postXmlCurl($xml, $url, $useCert = false, $timeout = 3)
     {
+        $_hash = md5($url.'|'.$xml.'|'.uniqid());
+        LogHelper::log([
+            'reqHash POST' => $_hash,
+            'url' => $url,
+            'body' => $xml,
+        ]);
         $ch = curl_init();
         //设置超时
-        curl_setopt($ch, CURLOPT_TIMEOUT, $second);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
         //要求结果为字符串且输出到屏幕上
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
+        curl_setopt($ch,CURLOPT_MAXREDIRS, 5);
 
         //如果有配置代理这里就设置代理
         if(self::CURL_PROXY_HOST != '0.0.0.0'
@@ -223,35 +141,54 @@ class WxBase extends Component
         //返回结果
         if($data){
             curl_close($ch);
+            LogHelper::log("resHash: {$_hash} | resContent: $data");
             return $data;
         } else {
             $code = curl_errno($ch);
             $msg = curl_error($ch);
             curl_close($ch);
+            LogHelper::log("resHash: {$_hash} | errorCode: $code | Msg: $msg");
             throw new \Exception("curl出错,Code:$code,Msg:$msg");
         }
     }
 
-    public function httpGet($url, $safe = true) {
-        $curl = curl_init();
-        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($curl, CURLOPT_TIMEOUT, 300);
+    public function httpGet($url, $safe = true, $timeout = 3)
+    {
+        $_hash = md5($url.'|'.uniqid());
+        LogHelper::log([
+            'reqHash GET' => $_hash,
+            'url' => $url,
+        ]);
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+        curl_setopt($ch,CURLOPT_MAXREDIRS, 5);
 
         if ($safe) {
             // 为保证数据传输的安全性，采用https方式调用，必须使用下面2行代码打开ssl安全校验。
-            curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, true);
-            curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 2);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
         }
 
-        curl_setopt($curl, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_URL, $url);
 
-        $res = curl_exec($curl);
-        curl_close($curl);
-
-        return $res;
+        //运行curl
+        $data = curl_exec($ch);
+        //返回结果
+        if($data){
+            curl_close($ch);
+            LogHelper::log("resHash: {$_hash} | resContent: $data");
+            return $data;
+        } else {
+            $code = curl_errno($ch);
+            $msg = curl_error($ch);
+            curl_close($ch);
+            LogHelper::log("resHash: {$_hash} | errorCode: $code | Msg: $msg");
+            throw new \Exception("curl出错,Code:$code,Msg:$msg");
+        }
     }
 
-    public function httpPost($url, $body, $type='json', $safe = true)
+    public function httpPost($url, $body, $type='json', $safe = true, $timeout = 3)
     {
         if (!is_string($body)) {
             if ($type == 'json') {
@@ -260,35 +197,52 @@ class WxBase extends Component
                 $body = http_build_query($body);
             }
         }
-        $curl = curl_init();
-        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($curl, CURLOPT_TIMEOUT, 300);
+        $_hash = md5($url.'|'.$body.'|'.uniqid());
+        LogHelper::log([
+            'reqHash POST' => $_hash,
+            'url' => $url,
+            'body' => $body,
+        ]);
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+        curl_setopt($ch,CURLOPT_MAXREDIRS, 5);
 
         if ($safe) {
             // 为保证数据传输的安全性，采用https方式调用，必须使用下面2行代码打开ssl安全校验。
-            curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, true);
-            curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 2);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
         }
 
         if ($type == 'json') {
-            curl_setopt($curl, CURLOPT_HTTPHEADER, [
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
                 "Connection: keep-alive",
                 "Content-Type: application/json; charset=UTF-8", //传送的数据类型
                 "Content-Length: ".strlen($body) //传送数据长度
             ]);
         } else {
-            curl_setopt($curl, CURLOPT_HTTPHEADER, [
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
                 "Connection: keep-alive"
             ]);
         }
-        curl_setopt($curl, CURLOPT_POST, 1);
-        curl_setopt($curl, CURLOPT_URL, $url);
-        curl_setopt($curl, CURLOPT_POSTFIELDS, $body);//要传送的所有数据
+        curl_setopt($ch, CURLOPT_POST, 1);
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);//要传送的所有数据
 
-        $res = curl_exec($curl);
-        curl_close($curl);
-
-        return $res;
+        //运行curl
+        $data = curl_exec($ch);
+        //返回结果
+        if($data){
+            curl_close($ch);
+            LogHelper::log("resHash: {$_hash} | resContent: $data");
+            return $data;
+        } else {
+            $code = curl_errno($ch);
+            $msg = curl_error($ch);
+            curl_close($ch);
+            LogHelper::log("resHash: {$_hash} | errorCode: $code | Msg: $msg");
+            throw new \Exception("curl出错,Code:$code,Msg:$msg");
+        }
     }
 
 
